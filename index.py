@@ -1,5 +1,6 @@
 import shioaji as sj
 import os
+import csv
 
 # 讀取配置檔案
 config = {}
@@ -29,7 +30,19 @@ scanners = api.scanners(
     cb=None,
 )
 
-# process scanner to output.txt
-with open("output.txt", "w") as f:
-    for scanner in scanners:
-        f.write(f"{scanner}\n")
+# 直接將 scanner 物件轉換為 CSV
+if scanners:
+    # 取得第一個 scanner 的所有屬性作為欄位
+    first_scanner = scanners[0]
+    fieldnames = list(first_scanner.__dict__.keys())
+
+    with open("output.csv", "w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+
+        for scanner in scanners:
+            writer.writerow(scanner.__dict__)
+
+    print(f"已將 {len(scanners)} 筆資料輸出至 output.csv")
+else:
+    print("沒有掃描結果")

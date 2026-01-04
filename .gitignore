@@ -6,6 +6,7 @@ Sinopac.pfx
 
 # 輸出檔案
 output.txt
+output.csv
 shioaji.log
 *.log
 
@@ -48,6 +49,7 @@ venv.bak/
 *.swo
 *~
 .DS_Store
+.github
 
 # uv
 .uv/
