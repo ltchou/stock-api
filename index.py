@@ -16,23 +16,17 @@ else:
     raise FileNotFoundError(f"請建立 {config_file} 並填入你的 API 資訊")
 
 api = sj.Shioaji(simulation=True)
-accounts = api.login(
-    config.get("API_KEY"),
-    config.get("SECRET_KEY")
-)
-api.activate_ca(
-    ca_path=config.get("CA_PATH"),
-    ca_passwd=config.get("CA_PASSWD")
-)
+accounts = api.login(config.get("API_KEY"), config.get("SECRET_KEY"))
+api.activate_ca(ca_path=config.get("CA_PATH"), ca_passwd=config.get("CA_PASSWD"))
 print(accounts)
 
 scanners = api.scanners(
-    scanner_type='ChangePercentRank',
+    scanner_type="ChangePercentRank",
     ascending=True,
-    date='2026-01-02',
+    date="2026-01-02",
     count=100,  # 0 <= count <= 200
     timeout=30000,
-    cb=None
+    cb=None,
 )
 
 # process scanner to output.txt
