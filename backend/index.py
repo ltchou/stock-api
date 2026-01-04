@@ -21,6 +21,25 @@ accounts = api.login(config.get("API_KEY"), config.get("SECRET_KEY"))
 api.activate_ca(ca_path=config.get("CA_PATH"), ca_passwd=config.get("CA_PASSWD"))
 print(accounts)
 
+# 查詢目前的流量使用狀況
+usage_info = api.usage()
+print(usage_info)
+
+# 檢查流量是否超限
+bytes_used = usage_info.bytes
+limit_bytes = usage_info.limit_bytes
+
+if bytes_used >= limit_bytes:
+    print(f"警告：流量已達上限！已使用 {bytes_used} bytes，上限為 {limit_bytes} bytes")
+    raise RuntimeError("API 流量已達上限，無法繼續執行掃描")
+else:
+    remaining_pct = (
+        ((limit_bytes - bytes_used) / limit_bytes * 100) if limit_bytes > 0 else 0
+    )
+    print(
+        f"流量檢查通過：已使用 {bytes_used} bytes / {limit_bytes} bytes ({remaining_pct:.2f}% 剩餘)"
+    )
+
 scanners = api.scanners(
     scanner_type="ChangePercentRank",
     ascending=True,

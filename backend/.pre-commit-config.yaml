@@ -1,21 +1,14 @@
 repos:
-  # Backend Python 檢查
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.8.6
     hooks:
       - id: ruff
         args: [--fix]
-        files: ^backend/
       - id: ruff-format
-        files: ^backend/
-  
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: v1.13.0
     hooks:
       - id: mypy
-        files: ^backend/
-  
-  # 版本一致性檢查
   - repo: local
     hooks:
       - id: check-version-consistency

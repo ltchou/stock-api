@@ -42,6 +42,20 @@ env.bak/
 venv.bak/
 .venv/
 
+# Backend
+backend/.venv/
+backend/__pycache__/
+backend/*.pyc
+backend/.pytest_cache/
+backend/.mypy_cache/
+backend/.ruff_cache/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vscode/
+frontend/.DS_Store
+
 # IDE
 .vscode/
 .idea/
