@@ -1,0 +1,19 @@
+[project]
+name = "sj-trading"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "leochou19", email = "leochou19@blueplanet.com.tw" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "shioaji>=1.2.7",
+]
+
+[project.scripts]
+sj-trading = "sj_trading:main"
+
+[build-system]
+requires = ["uv_build>=0.8.11,<0.9.0"]
+build-backend = "uv_build"

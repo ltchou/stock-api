@@ -1,0 +1,7 @@
+# API 認證資訊範本
+# 複製此檔案為 config.txt 並填入你的實際資訊
+
+API_KEY=YOUR_API_KEY
+SECRET_KEY=YOUR_SECRET_KEY
+CA_PATH=C:\Users\leoli\OneDrive\文件\code\stock-api\Sinopac.pfx
+CA_PASSWD=YOUR_CERT_PASSWORD
