@@ -1,0 +1,97 @@
+# Ruff 配置檔案
+# 參考: https://docs.astral.sh/ruff/configuration/
+
+# 專案根目錄
+target-version = "py313"
+
+# 行寬限制
+line-length = 88
+
+# 縮排
+indent-width = 4
+
+[lint]
+# 啟用的規則集
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes
+    "I",      # isort (import sorting)
+    "N",      # pep8-naming
+    "UP",     # pyupgrade
+    "B",      # flake8-bugbear
+    "C4",     # flake8-comprehensions
+    "DTZ",    # flake8-datetimez
+    "T10",    # flake8-debugger
+    "EM",     # flake8-errmsg
+    "ISC",    # flake8-implicit-str-concat
+    "ICN",    # flake8-import-conventions
+    "PIE",    # flake8-pie
+    "PT",     # flake8-pytest-style
+    "Q",      # flake8-quotes
+    "RSE",    # flake8-raise
+    "RET",    # flake8-return
+    "SIM",    # flake8-simplify
+    "TID",    # flake8-tidy-imports
+    "TCH",    # flake8-type-checking
+    "ARG",    # flake8-unused-arguments
+    "PTH",    # flake8-use-pathlib
+    "ERA",    # eradicate (commented-out code)
+    "PL",     # pylint
+    "TRY",    # tryceratops
+    "RUF",    # ruff-specific rules
+]
+
+# 忽略的規則
+ignore = [
+    "E501",    # 行長度由 formatter 處理
+    "PLR0913", # Too many arguments (允許較多參數)
+    "PLR0912", # Too many branches (複雜邏輯允許較多分支)
+    "PLR0915", # Too many statements (允許較長函式)
+    "TRY003",  # Avoid specifying long messages outside exception class
+    "TRY300",  # Consider moving to else block (不強制)
+    "TRY301",  # Abstract raise to inner function (不強制)
+    "TRY400",  # Use logging.exception (使用 logger.error 也可)
+    "EM101",   # Exception must not use a string literal
+    "EM102",   # Exception must not use an f-string literal
+    "RET504",  # Unnecessary assignment before return (保持可讀性)
+    "B904",    # raise from err (不強制在 FastAPI 中)
+    "RUF001",  # 忽略字串中的全形符號 (中文內容)
+    "RUF002",  # 忽略 docstring 中的全形符號 (中文文件)
+    "RUF003",  # 忽略註解中的全形符號 (中文註解)
+    "DTZ003",  # datetime.utcnow() 可以使用
+    "DTZ005",  # datetime.now() 不要求 tz (台灣時區)
+    "DTZ007",  # strptime 不要求 tz
+    "PLR2004", # 允許 magic numbers (例如 weekday < 5)
+    "PTH110",  # os.path.exists 可以使用 (不強制 Path)
+    "PTH123",  # open() 可以使用 (不強制 Path.open)
+    "PLW2901", # 允許在 for loop 中覆蓋變數
+]
+
+# 每個檔案允許未使用的變數名稱
+dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
+
+[lint.per-file-ignores]
+# 測試檔案可以有較長的行
+"test_*.py" = ["E501"]
+"**/tests/**/*.py" = ["E501"]
+
+[lint.isort]
+# Import 排序
+known-first-party = ["app", "sj_trading"]
+combine-as-imports = true
+
+[lint.pydocstyle]
+# Docstring 規範
+convention = "google"
+
+[format]
+# 格式化設定
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+
+# 自動修正 trailing whitespace
+docstring-code-format = true
+docstring-code-line-length = 88

@@ -1,5 +1,7 @@
-from pydantic import BaseModel, Field
+from datetime import datetime
 from typing import Any
+
+from pydantic import BaseModel, Field
 
 
 class ScanRequest(BaseModel):
@@ -60,3 +62,91 @@ class ScanResponse(BaseModel):
     data: list[StockData]
     total_count: int
     execution_time: float
+    message: str | None = None  # 額外訊息（例如：從資料庫讀取）
+
+
+class ScanHistoryItem(BaseModel):
+    """
+    掃描歷史記錄項目
+    """
+
+    id: int
+    timestamp: datetime
+    scanner_type: str
+    scan_date: str | None
+    count: int
+    ascending: bool
+    simulation: bool
+    success: bool
+    error_message: str | None
+    result_count: int
+    execution_time: int | None
+    raw_response: list[dict[str, Any]] | None
+    processed_results: list[dict[str, Any]] | None
+    usage_data: dict[str, Any] | None
+
+    class Config:
+        from_attributes = True
+
+
+class ScanHistoryResponse(BaseModel):
+    """
+    掃描歷史查詢回應
+    """
+
+    status: str = "success"
+    data: list[ScanHistoryItem]
+    total_count: int
+
+
+class DailyStockItem(BaseModel):
+    """
+    每日股票資料項目
+    """
+
+    id: int
+    date: str
+    code: str
+    name: str | None
+    rank: int
+    open: float | None
+    high: float | None
+    low: float | None
+    close: float | None
+    volume: int | None
+    total_volume: int | None
+    amount: float | None
+    total_amount: float | None
+    change_price: float | None
+    change_percent: float | None
+    average_price: float | None
+    buy_price: float | None
+    buy_volume: int | None
+    sell_price: float | None
+    sell_volume: int | None
+    ts: int | None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class DailyStockResponse(BaseModel):
+    """
+    每日股票資料回應
+    """
+
+    status: str = "success"
+    date: str
+    data: list[DailyStockItem]
+    total_count: int
+
+
+class AvailableDatesResponse(BaseModel):
+    """
+    可用日期列表回應
+    """
+
+    status: str = "success"
+    dates: list[str]
+    total_count: int
