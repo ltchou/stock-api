@@ -78,12 +78,8 @@ class ScanHistoryItem(BaseModel):
     ascending: bool
     simulation: bool
     success: bool
-    error_message: str | None
     result_count: int
     execution_time: int | None
-    raw_response: list[dict[str, Any]] | None
-    processed_results: list[dict[str, Any]] | None
-    usage_data: dict[str, Any] | None
 
     class Config:
         from_attributes = True

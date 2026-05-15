@@ -11,12 +11,6 @@ from sj_trading.config import load_config
 
 logger = logging.getLogger(__name__)
 
-# 配置 logging level 為 DEBUG 以顯示詳細資訊
-logging.basicConfig(
-    level=logging.DEBUG,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-)
-
 
 def scanner_to_dict(scanner: Any) -> dict[str, Any]:
     """
@@ -32,8 +26,7 @@ def scanner_to_dict(scanner: Any) -> dict[str, Any]:
         包含 scanner 屬性的字典
     """
     result = scanner.__dict__.copy()
-    logger.debug(f"Scanner object keys: {list(result.keys())}")
-    logger.debug(f"Sample scanner data: {result}")
+    logger.debug("Scanner object keys: %s", list(result.keys()))
 
     # 欄位名稱映射（處理可能的命名差異）
     field_mapping = {
@@ -66,11 +59,11 @@ def scanners_to_list(scanners: list[Any]) -> list[dict[str, Any]]:
     Returns:
         字典列表
     """
-    logger.debug(f"收到 {len(scanners)} 個 scanner 物件")
+    logger.debug("Received %s scanner objects", len(scanners))
     if scanners:
-        logger.debug(f"第一個 scanner 物件類型: {type(scanners[0])}")
+        logger.debug("First scanner object type: %s", type(scanners[0]).__name__)
     result = [scanner_to_dict(scanner) for scanner in scanners]
-    logger.debug(f"轉換完成，共 {len(result)} 筆資料")
+    logger.debug("Converted %s scanner records", len(result))
     return result
 
 
@@ -188,14 +181,14 @@ def execute_scan(
         num_scanners = len(scanners) if scanners else 0
         logger.info(f"Shioaji API 回傳 {num_scanners} 個 scanner 物件")
         if scanners:
-            logger.debug(f"第一筆 scanner 原始物件: {scanners[0]}")
+            logger.debug("First scanner object type: %s", type(scanners[0]).__name__)
 
         # 轉換為字典列表
         results = scanners_to_list(scanners)
         results = normalize_scanner_fields(results, scanner_type)
 
         if results:
-            logger.info(f"轉換後第一筆資料預覽: {results[0]}")
+            logger.debug("Converted scanner result keys: %s", list(results[0].keys()))
         else:
             logger.warning("警告：轉換後沒有資料！")
 
