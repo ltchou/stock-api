@@ -188,23 +188,9 @@ async def upsert_daily_stocks(
         if code not in unique_stocks or ts > unique_stocks[code].get("ts", 0):
             unique_stocks[code] = stock
 
-    # 根據掃描器類型選擇排序方式
-    if scanner_type == "ChangePercentRank":
-        sort_field = "change_percent"
-    elif scanner_type == "VolumeRank":
-        sort_field = "total_volume"
-    else:  # AmountRank 或其他
-        sort_field = "total_amount"
-
-    def sort_key(stock: dict[str, Any]) -> Any:
-        return stock.get(sort_field, 0)
-
-    # 按照指定欄位降序排列，並設置正確的排名
-    sorted_stocks = sorted(
-        unique_stocks.values(),
-        key=sort_key,
-        reverse=True,  # 降序：大到小
-    )
+    # Shioaji 已依 scanner_type 與 canonical ascending 參數排好序。
+    # 以 API 回傳順序建立 rank，避免後端猜錯新 scanner_type 的排序欄位。
+    sorted_stocks = list(unique_stocks.values())
 
     # 批次插入去重後的資料（帶有正確的排名）
     for rank, stock in enumerate(sorted_stocks, start=1):
@@ -263,17 +249,11 @@ async def get_daily_stocks(
     Returns:
         股票資料列表（按指定欄位排序）
     """
-    # 根據掃描器類型選擇排序欄位
-    order_field: Any
-    if scanner_type == "ChangePercentRank":
-        order_field = StockDailyData.change_percent
-    elif scanner_type == "VolumeRank":
-        order_field = StockDailyData.total_volume
-    else:  # AmountRank 或其他
-        order_field = StockDailyData.total_amount
-
-    # 根據 ascending 參數決定排序方向
-    order_clause = order_field.asc() if ascending else order_field.desc()
+    # 快取資料的 rank 代表 upstream scanner 的 canonical 排名。
+    # ascending=True 時回傳 cached top-N 的反向順序；False 時維持排名由前到後。
+    order_clause = (
+        StockDailyData.rank.desc() if ascending else StockDailyData.rank.asc()
+    )
 
     result = await db.execute(
         select(StockDailyData)

@@ -204,6 +204,22 @@ async def scan_stocks(
                 message=f"從資料庫讀取（共 {len(db_results)} 筆）",
             )
 
+            await create_scan_history(
+                db=db,
+                scanner_type=request.scanner_type,
+                scan_date=request.date,
+                count=request.count,
+                ascending=request.ascending,
+                simulation=request.simulation,
+                success=True,
+                result_count=len(stock_data),
+                execution_time=execution_time,
+                raw_response=[],
+                processed_results=[item.dict() for item in stock_data],
+                usage_data=None,
+            )
+            await cleanup_old_scans(db, keep_count=10)
+
             return response_data
 
         # 資料庫沒有足夠資料，抓滿 200 筆後寫入快取，再回傳使用者要求的筆數
