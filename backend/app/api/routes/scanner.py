@@ -34,7 +34,6 @@ from sj_trading import execute_scan, generate_csv  # type: ignore[import-untyped
 router = APIRouter()
 logger = logging.getLogger(__name__)
 CACHE_FILL_COUNT = 200
-CACHE_FILL_ASCENDING = False
 
 # 配置日誌
 logging.basicConfig(
@@ -96,39 +95,14 @@ def daily_stock_to_dict(item) -> dict:
     }
 
 
-def get_stock_sort_value(stock: dict, scanner_type: str):
-    """
-    取得掃描器類型對應的排序值。
-    """
-    if scanner_type == "ChangePercentRank":
-        change_percent = stock.get("change_percent")
-        if change_percent is not None:
-            return change_percent
-        rank_value = stock.get("rank_value")
-        if rank_value is not None:
-            return rank_value
-        return 0
-    if scanner_type == "VolumeRank":
-        total_volume = stock.get("total_volume")
-        return total_volume if total_volume is not None else 0
-    total_amount = stock.get("total_amount")
-    return total_amount if total_amount is not None else 0
-
-
 def select_requested_results(
     stocks: list[dict],
-    scanner_type: str,
     count: int,
-    ascending: bool,
 ) -> list[dict]:
     """
-    從抓回來的 canonical 快取資料中，依使用者要求排序並取出指定筆數。
+    從抓回來且已依使用者要求排序的 API 資料中取出指定筆數。
     """
-    return sorted(
-        stocks,
-        key=lambda item: get_stock_sort_value(item, scanner_type),
-        reverse=not ascending,
-    )[:count]
+    return stocks[:count]
 
 
 @router.post("/scan", response_model=ScanResponse)
@@ -169,6 +143,7 @@ async def scan_stocks(
             db,
             request.date,
             scanner_type=request.scanner_type,
+            ascending=request.ascending,
         )
         db_results = []
         if cached_count >= request.count:
@@ -225,13 +200,13 @@ async def scan_stocks(
         # 資料庫沒有足夠資料，抓滿 200 筆後寫入快取，再回傳使用者要求的筆數
         logger.info(
             f"資料庫無足夠資料，呼叫 Shioaji API 抓取 {CACHE_FILL_COUNT} 筆 "
-            f"canonical 資料（ascending={CACHE_FILL_ASCENDING}）"
+            f"資料（ascending={request.ascending}）"
         )
         results, execution_time, usage_data = execute_scan(
             scanner_type=request.scanner_type,
             date=request.date,
             count=CACHE_FILL_COUNT,
-            ascending=CACHE_FILL_ASCENDING,
+            ascending=request.ascending,
             simulation=request.simulation,
             config_file="config.txt",
         )
@@ -245,7 +220,11 @@ async def scan_stocks(
         if results:
             try:
                 count = await upsert_daily_stocks(
-                    db, request.date, results, scanner_type=request.scanner_type
+                    db,
+                    request.date,
+                    results,
+                    scanner_type=request.scanner_type,
+                    ascending=request.ascending,
                 )
                 cache_write_succeeded = True
                 logger.info(
@@ -269,9 +248,7 @@ async def scan_stocks(
         if not stock_data:
             requested_results = select_requested_results(
                 results or [],
-                request.scanner_type,
                 request.count,
-                request.ascending,
             )
             stock_data = [StockData(**item) for item in requested_results]
 
@@ -433,6 +410,7 @@ async def export_csv(
             db,
             request.date,
             scanner_type=request.scanner_type,
+            ascending=request.ascending,
         )
         db_results = []
         if cached_count >= request.count:
@@ -459,13 +437,13 @@ async def export_csv(
             # 資料庫沒有足夠資料，抓滿 200 筆後寫入快取，再匯出使用者要求的筆數
             logger.info(
                 f"資料庫無足夠資料，呼叫 Shioaji API 抓取 {CACHE_FILL_COUNT} 筆 "
-                f"canonical 資料進行匯出（ascending={CACHE_FILL_ASCENDING}）"
+                f"資料進行匯出（ascending={request.ascending}）"
             )
             fetched_results, _, _ = execute_scan(
                 scanner_type=request.scanner_type,
                 date=request.date,
                 count=CACHE_FILL_COUNT,
-                ascending=CACHE_FILL_ASCENDING,
+                ascending=request.ascending,
                 simulation=request.simulation,
                 config_file="config.txt",
             )
@@ -478,6 +456,7 @@ async def export_csv(
                         request.date,
                         fetched_results,
                         scanner_type=request.scanner_type,
+                        ascending=request.ascending,
                     )
                     cache_write_succeeded = True
                     logger.info(
@@ -500,9 +479,7 @@ async def export_csv(
             if not results:
                 results = select_requested_results(
                     fetched_results or [],
-                    request.scanner_type,
                     request.count,
-                    request.ascending,
                 )
 
         # 產生 CSV

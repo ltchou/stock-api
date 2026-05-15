@@ -155,6 +155,7 @@ async def upsert_daily_stocks(
     date: str,
     stocks_data: list[dict[str, Any]],
     scanner_type: str = "AmountRank",
+    ascending: bool = False,
 ) -> int:
     """
     批次插入或更新每日股票資料
@@ -163,16 +164,18 @@ async def upsert_daily_stocks(
         db: 資料庫 session
         date: 交易日期
         stocks_data: 股票資料列表
-        scanner_type: 掃描器類型（用於決定排序方式）
+        scanner_type: 掃描器類型
+        ascending: 此批快取資料的排序方向
 
     Returns:
         插入/更新的記錄數量
     """
-    # 先刪除該日期該掃描器類型的舊資料（如果存在）
+    # 先刪除該日期、掃描器類型與排序方向的舊資料（如果存在）
     await db.execute(
         delete(StockDailyData).where(
             StockDailyData.date == date,
             StockDailyData.scanner_type == scanner_type,
+            StockDailyData.cache_ascending == ascending,
         )
     )
 
@@ -197,6 +200,7 @@ async def upsert_daily_stocks(
         daily_record = StockDailyData(
             date=date,
             scanner_type=scanner_type,
+            cache_ascending=ascending,
             code=stock.get("code"),
             name=stock.get("name"),
             rank=rank,  # 使用計算出的排名（1-based）
@@ -243,23 +247,21 @@ async def get_daily_stocks(
         db: 資料庫 session
         date: 交易日期
         limit: 查詢數量
-        ascending: 是否升序（False=大到小，True=小到大）
+        ascending: 快取資料的排序方向（False=大到小，True=小到大）
         scanner_type: 掃描器類型（用於決定排序欄位）
 
     Returns:
         股票資料列表（按指定欄位排序）
     """
-    # 快取資料的 rank 代表 upstream scanner 的 canonical 排名。
-    # ascending=True 時回傳 cached top-N 的反向順序；False 時維持排名由前到後。
-    order_clause = (
-        StockDailyData.rank.desc() if ascending else StockDailyData.rank.asc()
-    )
+    # 快取資料的 rank 代表該排序方向下的 upstream scanner 排名。
+    order_clause = StockDailyData.rank.asc()
 
     result = await db.execute(
         select(StockDailyData)
         .where(
             StockDailyData.date == date,
             StockDailyData.scanner_type == scanner_type,
+            StockDailyData.cache_ascending == ascending,
         )
         .order_by(order_clause)
         .limit(limit)
@@ -271,6 +273,7 @@ async def get_daily_stock_count(
     db: AsyncSession,
     date: str,
     scanner_type: str = "AmountRank",
+    ascending: bool = False,
 ) -> int:
     """
     取得指定日期與掃描器類型的快取資料筆數。
@@ -279,6 +282,7 @@ async def get_daily_stock_count(
         db: 資料庫 session
         date: 交易日期
         scanner_type: 掃描器類型
+        ascending: 快取資料的排序方向
 
     Returns:
         快取資料筆數
@@ -289,6 +293,7 @@ async def get_daily_stock_count(
         .where(
             StockDailyData.date == date,
             StockDailyData.scanner_type == scanner_type,
+            StockDailyData.cache_ascending == ascending,
         )
     )
     return int(result.scalar_one())

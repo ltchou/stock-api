@@ -63,6 +63,7 @@ class StockDailyData(Base):
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     date = Column(String(20), nullable=False, index=True)  # 交易日期 YYYY-MM-DD
     scanner_type = Column(String(50), nullable=False, index=True)  # 掃描器類型
+    cache_ascending = Column(Boolean, nullable=False, default=False, index=True)
     code = Column(String(20), nullable=False, index=True)  # 股票代碼
     name = Column(String(100), nullable=True)  # 股票名稱
     rank = Column(Integer, nullable=False)  # 排名（1-200）
@@ -98,7 +99,13 @@ class StockDailyData(Base):
 
     # 確保同一天同一股票同一掃描器類型只有一筆記錄
     __table_args__ = (
-        UniqueConstraint("date", "scanner_type", "code", name="uq_date_scanner_code"),
+        UniqueConstraint(
+            "date",
+            "scanner_type",
+            "cache_ascending",
+            "code",
+            name="uq_date_scanner_direction_code",
+        ),
     )
 
     def __repr__(self):
