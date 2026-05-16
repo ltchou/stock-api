@@ -57,7 +57,7 @@ async def create_scan_history(
         simulation=simulation,
         success=success,
         result_count=result_count,
-        execution_time=int(execution_time) if execution_time else None,
+        execution_time=int(execution_time) if execution_time is not None else None,
         raw_response=raw_response,
         processed_results=processed_results,
         usage_data=usage_data,
@@ -180,20 +180,22 @@ async def upsert_daily_stocks(
     )
 
     # 去重複：對於同一個股票代碼，保留時間戳最新的那筆
-    unique_stocks: dict[str, dict[str, Any]] = {}
-    for stock in stocks_data:
+    unique_stocks: dict[str, tuple[int, dict[str, Any]]] = {}
+    for index, stock in enumerate(stocks_data):
         code = stock.get("code")
         ts = stock.get("ts", 0)
         if not isinstance(code, str) or not code:
             continue
 
         # 如果這個代碼還沒見過，或者這筆資料的時間戳更新，就更新記錄
-        if code not in unique_stocks or ts > unique_stocks[code].get("ts", 0):
-            unique_stocks[code] = stock
+        if code not in unique_stocks or ts > unique_stocks[code][1].get("ts", 0):
+            unique_stocks[code] = (index, stock)
 
     # Shioaji 已依 scanner_type 與 canonical ascending 參數排好序。
     # 以 API 回傳順序建立 rank，避免後端猜錯新 scanner_type 的排序欄位。
-    sorted_stocks = list(unique_stocks.values())
+    sorted_stocks = [
+        stock for _, stock in sorted(unique_stocks.values(), key=lambda item: item[0])
+    ]
 
     # 批次插入去重後的資料（帶有正確的排名）
     for rank, stock in enumerate(sorted_stocks, start=1):
