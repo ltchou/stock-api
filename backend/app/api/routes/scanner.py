@@ -586,6 +586,7 @@ async def get_daily_data(
     db: Annotated[AsyncSession, Depends(get_db)],
     limit: int = 200,
     scanner_type: str | None = None,
+    ascending: bool | None = None,
 ):
     """
     取得指定日期的股票資料
@@ -613,10 +614,19 @@ async def get_daily_data(
                 "AmountRank" if "AmountRank" in scanner_types else scanner_types[0]
             )
 
-        # 查詢資料
-        stocks = await get_daily_stocks(
-            db, date=date, limit=limit, scanner_type=selected_scanner_type
-        )
+        # Preserve the existing default direction, then fall back to ascending cache.
+        cache_directions = [ascending] if ascending is not None else [False, True]
+        stocks = []
+        for cache_ascending in cache_directions:
+            stocks = await get_daily_stocks(
+                db,
+                date=date,
+                limit=limit,
+                ascending=cache_ascending,
+                scanner_type=selected_scanner_type,
+            )
+            if stocks:
+                break
 
         if not stocks:
             raise HTTPException(status_code=404, detail=f"找不到 {date} 的資料")
