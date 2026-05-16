@@ -1,7 +1,7 @@
 """股票掃描器 API 路由"""
 
 import logging
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse, Response
@@ -110,6 +110,7 @@ async def record_scan_failure(
     db: AsyncSession,
     request: ScanRequest,
     error_message: str,
+    usage_data: dict[str, Any] | None = None,
 ) -> None:
     """
     Roll back any failed transaction state before recording scan failure history.
@@ -132,10 +133,44 @@ async def record_scan_failure(
             simulation=request.simulation,
             success=False,
             result_count=0,
+            usage_data=usage_data,
             error_message=error_message,
         )
     except Exception as history_error:
         logger.error("Failed to record scan failure history: %s", history_error)
+
+
+async def record_scan_success(
+    db: AsyncSession,
+    request: ScanRequest,
+    result_count: int,
+    execution_time: float | None = None,
+    raw_response: list[dict[str, Any]] | None = None,
+    processed_results: list[dict[str, Any]] | None = None,
+    usage_data: dict[str, Any] | None = None,
+) -> None:
+    """
+    Record successful scan history without making history writes part of scan success.
+    """
+    try:
+        await create_scan_history(
+            db=db,
+            scanner_type=request.scanner_type,
+            scan_date=request.date,
+            count=request.count,
+            ascending=request.ascending,
+            simulation=request.simulation,
+            success=True,
+            result_count=result_count,
+            execution_time=execution_time,
+            raw_response=raw_response,
+            processed_results=processed_results,
+            usage_data=usage_data,
+        )
+        await cleanup_old_scans(db, keep_count=10)
+    except Exception as history_error:
+        await db.rollback()
+        logger.error("Failed to record scan success history: %s", history_error)
 
 
 @router.post("/scan", response_model=ScanResponse)
@@ -212,21 +247,14 @@ async def scan_stocks(
                 message=f"從資料庫讀取（共 {len(db_results)} 筆）",
             )
 
-            await create_scan_history(
-                db=db,
-                scanner_type=request.scanner_type,
-                scan_date=request.date,
-                count=request.count,
-                ascending=request.ascending,
-                simulation=request.simulation,
-                success=True,
+            await record_scan_success(
+                db,
+                request,
                 result_count=len(stock_data),
                 execution_time=execution_time,
                 raw_response=[],
                 processed_results=[item.dict() for item in stock_data],
-                usage_data=None,
             )
-            await cleanup_old_scans(db, keep_count=10)
 
             return response_data
 
@@ -285,25 +313,6 @@ async def scan_stocks(
             )
             stock_data = [StockData(**item) for item in requested_results]
 
-        # 儲存成功的掃描記錄到資料庫
-        await create_scan_history(
-            db=db,
-            scanner_type=request.scanner_type,
-            scan_date=request.date,
-            count=request.count,
-            ascending=request.ascending,
-            simulation=request.simulation,
-            success=True,
-            result_count=len(stock_data),
-            execution_time=execution_time,
-            raw_response=raw_scanners,
-            processed_results=[item.dict() for item in stock_data],
-            usage_data=usage_data,
-        )
-
-        # 清理舊記錄，只保留最近 10 筆
-        await cleanup_old_scans(db, keep_count=10)
-
         response_data = ScanResponse(
             status="success",
             data=stock_data,
@@ -312,29 +321,45 @@ async def scan_stocks(
         )
 
         # 檢查流量狀況並設定適當的 status code
-        if usage_data:
-            if usage_data["is_over_limit"]:
-                # 流量已超限，回傳 429 Too Many Requests
-                return JSONResponse(
-                    status_code=429,
-                    content={
-                        "detail": usage_data["warning"],
-                        "bytes_used": usage_data["bytes_used"],
-                        "limit_bytes": usage_data["limit_bytes"],
-                    },
-                )
-            if usage_data["remaining_percent"] < 10:
-                # 流量剩餘不足 10%，回傳 206 Partial Content（帶警告和完整資料）
-                return JSONResponse(
-                    status_code=206,
-                    content={
-                        "status": "success",
-                        "data": [item.dict() for item in stock_data],
-                        "total_count": len(stock_data),
-                        "execution_time": execution_time,
-                        "warning": f"警告：流量即將用盡，剩餘 {usage_data['remaining_percent']:.2f}%",
-                    },
-                )
+        if usage_data and usage_data["is_over_limit"]:
+            await record_scan_failure(
+                db,
+                request,
+                usage_data["warning"] or "API traffic quota exceeded",
+                usage_data=usage_data,
+            )
+            # 流量已超限，回傳 429 Too Many Requests
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "detail": usage_data["warning"],
+                    "bytes_used": usage_data["bytes_used"],
+                    "limit_bytes": usage_data["limit_bytes"],
+                },
+            )
+
+        await record_scan_success(
+            db,
+            request,
+            result_count=len(stock_data),
+            execution_time=execution_time,
+            raw_response=raw_scanners,
+            processed_results=[item.dict() for item in stock_data],
+            usage_data=usage_data,
+        )
+
+        if usage_data and usage_data["remaining_percent"] < 10:
+            # 流量剩餘不足 10%，回傳 206 Partial Content（帶警告和完整資料）
+            return JSONResponse(
+                status_code=206,
+                content={
+                    "status": "success",
+                    "data": [item.dict() for item in stock_data],
+                    "total_count": len(stock_data),
+                    "execution_time": execution_time,
+                    "warning": f"警告：流量即將用盡，剩餘 {usage_data['remaining_percent']:.2f}%",
+                },
+            )
 
         return response_data
 
