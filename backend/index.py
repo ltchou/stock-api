@@ -1,13 +1,14 @@
-import shioaji as sj
-import os
 import csv
+import os
+
+import shioaji as sj
 
 # 讀取配置檔案
 config = {}
 config_file = "config.txt"
 
 if os.path.exists(config_file):
-    with open(config_file, "r", encoding="utf-8") as f:
+    with open(config_file, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if line and not line.startswith("#") and "=" in line:

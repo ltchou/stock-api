@@ -1,13 +1,39 @@
 """股票掃描器 API 路由"""
 
 import logging
-from fastapi import APIRouter, HTTPException
-from fastapi.responses import Response, JSONResponse
-from app.models import ScanRequest, ScanResponse, StockData
-from sj_trading import execute_scan, generate_csv
+from typing import Annotated, Any
+
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import JSONResponse, Response
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.crud import (
+    cleanup_old_scans,
+    create_scan_history,
+    get_available_dates,
+    get_available_scanner_types,
+    get_daily_stock_count,
+    get_daily_stocks,
+    get_latest_scan,
+    get_scan_history,
+    upsert_daily_stocks,
+)
+from app.database import get_db
+from app.models import (
+    AvailableDatesResponse,
+    DailyStockItem,
+    DailyStockResponse,
+    ScanHistoryItem,
+    ScanHistoryResponse,
+    ScanRequest,
+    ScanResponse,
+    StockData,
+)
+from sj_trading import execute_scan, generate_csv  # type: ignore[import-untyped]
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+CACHE_FILL_COUNT = 200
 
 # 配置日誌
 logging.basicConfig(
@@ -16,13 +42,151 @@ logging.basicConfig(
 )
 
 
-@router.post("/scan", response_model=ScanResponse)
-async def scan_stocks(request: ScanRequest):
+def daily_stock_to_stock_data(item) -> StockData:
     """
-    執行股票掃描
+    將資料庫每日股票資料轉成 API 回應格式。
+    """
+    return StockData(
+        code=item.code,
+        name=item.name,
+        date=item.date,
+        open=item.open,
+        high=item.high,
+        low=item.low,
+        close=item.close,
+        volume=item.volume,
+        total_volume=item.total_volume,
+        amount=item.amount,
+        total_amount=item.total_amount,
+        change_price=item.change_price,
+        change_percent=item.change_percent,
+        average_price=item.average_price,
+        buy_price=item.buy_price,
+        buy_volume=item.buy_volume,
+        sell_price=item.sell_price,
+        sell_volume=item.sell_volume,
+        ts=item.ts,
+    )
+
+
+def daily_stock_to_dict(item) -> dict:
+    """
+    將資料庫每日股票資料轉成 CSV 匯出使用的 dict。
+    """
+    return {
+        "code": item.code,
+        "name": item.name,
+        "date": item.date,
+        "open": item.open,
+        "high": item.high,
+        "low": item.low,
+        "close": item.close,
+        "volume": item.volume,
+        "total_volume": item.total_volume,
+        "amount": item.amount,
+        "total_amount": item.total_amount,
+        "change_price": item.change_price,
+        "change_percent": item.change_percent,
+        "average_price": item.average_price,
+        "buy_price": item.buy_price,
+        "buy_volume": item.buy_volume,
+        "sell_price": item.sell_price,
+        "sell_volume": item.sell_volume,
+        "ts": item.ts,
+    }
+
+
+def select_requested_results(
+    stocks: list[dict],
+    count: int,
+) -> list[dict]:
+    """
+    從抓回來且已依使用者要求排序的 API 資料中取出指定筆數。
+    """
+    return stocks[:count]
+
+
+async def record_scan_failure(
+    db: AsyncSession,
+    request: ScanRequest,
+    error_message: str,
+    usage_data: dict[str, Any] | None = None,
+) -> None:
+    """
+    Roll back any failed transaction state before recording scan failure history.
+    """
+    try:
+        await db.rollback()
+    except Exception as rollback_error:
+        logger.error(
+            "Failed to roll back before recording scan failure: %s",
+            rollback_error,
+        )
+
+    try:
+        await create_scan_history(
+            db=db,
+            scanner_type=request.scanner_type,
+            scan_date=request.date,
+            count=request.count,
+            ascending=request.ascending,
+            simulation=request.simulation,
+            success=False,
+            result_count=0,
+            usage_data=usage_data,
+            error_message=error_message,
+        )
+    except Exception as history_error:
+        logger.error("Failed to record scan failure history: %s", history_error)
+
+
+async def record_scan_success(
+    db: AsyncSession,
+    request: ScanRequest,
+    result_count: int,
+    execution_time: float | None = None,
+    raw_response: list[dict[str, Any]] | None = None,
+    processed_results: list[dict[str, Any]] | None = None,
+    usage_data: dict[str, Any] | None = None,
+) -> None:
+    """
+    Record successful scan history without making history writes part of scan success.
+    """
+    try:
+        await create_scan_history(
+            db=db,
+            scanner_type=request.scanner_type,
+            scan_date=request.date,
+            count=request.count,
+            ascending=request.ascending,
+            simulation=request.simulation,
+            success=True,
+            result_count=result_count,
+            execution_time=execution_time,
+            raw_response=raw_response,
+            processed_results=processed_results,
+            usage_data=usage_data,
+        )
+        await cleanup_old_scans(db, keep_count=10)
+    except Exception as history_error:
+        await db.rollback()
+        logger.error("Failed to record scan success history: %s", history_error)
+
+
+@router.post("/scan", response_model=ScanResponse)
+async def scan_stocks(
+    request: ScanRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """
+    執行股票掃描（優先從資料庫讀取）
+
+    如果資料庫已有該日期的資料，直接返回資料庫中的記錄。
+    只有當資料庫沒有資料時，才會呼叫 Shioaji API。
 
     Args:
         request: 掃描請求參數
+        db: 資料庫 session
 
     Returns:
         掃描結果
@@ -30,24 +194,124 @@ async def scan_stocks(request: ScanRequest):
     Raises:
         HTTPException: 當掃描失敗時
     """
+    raw_scanners = None
+    results = None
+    execution_time = None
+    usage_data = None
+    error_msg = None
+
     try:
         logger.info(
             f"開始掃描: type={request.scanner_type}, date={request.date}, "
             f"count={request.count}, ascending={request.ascending}"
         )
 
-        # 執行掃描
+        # 首先檢查資料庫是否已有足夠筆數（支援所有掃描器類型）
+        cached_count = await get_daily_stock_count(
+            db,
+            request.date,
+            scanner_type=request.scanner_type,
+            ascending=request.ascending,
+        )
+        db_results = []
+        if cached_count >= request.count:
+            db_results = await get_daily_stocks(
+                db,
+                request.date,
+                limit=request.count,
+                ascending=request.ascending,
+                scanner_type=request.scanner_type,
+            )
+        elif cached_count > 0:
+            logger.info(
+                f"資料庫僅有 {cached_count} 筆 {request.date} 的 "
+                f"{request.scanner_type} 資料，少於要求的 {request.count} 筆，將重新呼叫 API"
+            )
+
+        if db_results:
+            logger.info(
+                f"從資料庫讀取 {request.date} 的 {request.scanner_type} 資料，共 {len(db_results)} 筆"
+            )
+            execution_time = 0.0
+
+            # 轉換資料庫結果為 StockData 格式
+            stock_data = [daily_stock_to_stock_data(item) for item in db_results]
+
+            # 資料已經按照 ascending 參數正確排序，不需要額外處理
+
+            response_data = ScanResponse(
+                status="success",
+                data=stock_data,
+                total_count=len(stock_data),
+                execution_time=execution_time,
+                message=f"從資料庫讀取（共 {len(db_results)} 筆）",
+            )
+
+            await record_scan_success(
+                db,
+                request,
+                result_count=len(stock_data),
+                execution_time=execution_time,
+                raw_response=[],
+                processed_results=[item.dict() for item in stock_data],
+            )
+
+            return response_data
+
+        # 資料庫沒有足夠資料，抓滿 200 筆後寫入快取，再回傳使用者要求的筆數
+        logger.info(
+            f"資料庫無足夠資料，呼叫 Shioaji API 抓取 {CACHE_FILL_COUNT} 筆 "
+            f"資料（ascending={request.ascending}）"
+        )
         results, execution_time, usage_data = execute_scan(
             scanner_type=request.scanner_type,
             date=request.date,
-            count=request.count,
+            count=CACHE_FILL_COUNT,
             ascending=request.ascending,
             simulation=request.simulation,
             config_file="config.txt",
         )
 
-        # 轉換為 Pydantic 模型
-        stock_data = [StockData(**item) for item in results]
+        # 記錄原始資料（用於除錯）
+        raw_scanners = results.copy() if results else []
+        logger.debug(f"收到 {len(raw_scanners)} 筆原始掃描資料")
+
+        # 儲存所有掃描器類型的資料到每日股票資料表
+        cache_write_succeeded = False
+        if results:
+            try:
+                count = await upsert_daily_stocks(
+                    db,
+                    request.date,
+                    results,
+                    scanner_type=request.scanner_type,
+                    ascending=request.ascending,
+                )
+                cache_write_succeeded = True
+                logger.info(
+                    f"已將 {count} 筆 {request.scanner_type} 資料儲存到每日股票資料表"
+                )
+            except Exception as e:
+                await db.rollback()
+                logger.error(f"儲存每日股票資料失敗: {e}")
+                # 不影響主流程，繼續執行
+
+        stock_data = []
+        if cache_write_succeeded:
+            db_results = await get_daily_stocks(
+                db,
+                request.date,
+                limit=request.count,
+                ascending=request.ascending,
+                scanner_type=request.scanner_type,
+            )
+            stock_data = [daily_stock_to_stock_data(item) for item in db_results]
+        if not stock_data:
+            requested_results = select_requested_results(
+                results or [],
+                request.count,
+            )
+            stock_data = [StockData(**item) for item in requested_results]
 
         response_data = ScanResponse(
             status="success",
@@ -57,56 +321,92 @@ async def scan_stocks(request: ScanRequest):
         )
 
         # 檢查流量狀況並設定適當的 status code
-        if usage_data:
-            if usage_data["is_over_limit"]:
-                # 流量已超限，回傳 429 Too Many Requests
-                return JSONResponse(
-                    status_code=429,
-                    content={
-                        "detail": usage_data["warning"],
-                        "bytes_used": usage_data["bytes_used"],
-                        "limit_bytes": usage_data["limit_bytes"],
-                    },
-                )
-            elif usage_data["remaining_percent"] < 10:
-                # 流量剩餘不足 10%，回傳 206 Partial Content（帶警告和完整資料）
-                return JSONResponse(
-                    status_code=206,
-                    content={
-                        "status": "success",
-                        "data": [item.dict() for item in stock_data],
-                        "total_count": len(stock_data),
-                        "execution_time": execution_time,
-                        "warning": f"警告：流量即將用盡，剩餘 {usage_data['remaining_percent']:.2f}%",
-                    },
-                )
+        if usage_data and usage_data["is_over_limit"]:
+            await record_scan_failure(
+                db,
+                request,
+                usage_data["warning"] or "API traffic quota exceeded",
+                usage_data=usage_data,
+            )
+            # 流量已超限，回傳 429 Too Many Requests
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "detail": usage_data["warning"],
+                    "bytes_used": usage_data["bytes_used"],
+                    "limit_bytes": usage_data["limit_bytes"],
+                },
+            )
+
+        await record_scan_success(
+            db,
+            request,
+            result_count=len(stock_data),
+            execution_time=execution_time,
+            raw_response=raw_scanners,
+            processed_results=[item.dict() for item in stock_data],
+            usage_data=usage_data,
+        )
+
+        if usage_data and usage_data["remaining_percent"] < 10:
+            # 流量剩餘不足 10%，回傳 206 Partial Content（帶警告和完整資料）
+            return JSONResponse(
+                status_code=206,
+                content={
+                    "status": "success",
+                    "data": [item.dict() for item in stock_data],
+                    "total_count": len(stock_data),
+                    "execution_time": execution_time,
+                    "warning": f"警告：流量即將用盡，剩餘 {usage_data['remaining_percent']:.2f}%",
+                },
+            )
 
         return response_data
 
     except FileNotFoundError as e:
-        logger.error(f"配置檔案錯誤: {e}")
-        raise HTTPException(status_code=500, detail=f"配置檔案錯誤: {str(e)}")
+        error_msg = f"配置檔案錯誤: {e!s}"
+        logger.error(error_msg)
+
+        await record_scan_failure(db, request, error_msg)
+
+        raise HTTPException(status_code=500, detail=error_msg)
 
     except ValueError as e:
-        logger.error(f"參數錯誤: {e}")
+        error_msg = f"參數錯誤: {e!s}"
+        logger.error(error_msg)
+
+        await record_scan_failure(db, request, error_msg)
+
         raise HTTPException(status_code=400, detail=str(e))
 
     except TimeoutError:
-        logger.error("掃描逾時")
+        error_msg = "掃描逾時"
+        logger.error(error_msg)
+
+        await record_scan_failure(db, request, error_msg)
+
         raise HTTPException(status_code=504, detail="掃描逾時，請稍後再試")
 
     except Exception as e:
-        logger.error(f"掃描失敗: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"掃描失敗: {str(e)}")
+        error_msg = f"掃描失敗: {e!s}"
+        logger.error(error_msg, exc_info=True)
+
+        await record_scan_failure(db, request, error_msg)
+
+        raise HTTPException(status_code=500, detail=error_msg)
 
 
 @router.post("/export")
-async def export_csv(request: ScanRequest):
+async def export_csv(
+    request: ScanRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
     """
-    匯出 CSV 檔案
+    匯出 CSV 檔案（優先從資料庫讀取）
 
     Args:
         request: 掃描請求參數
+        db: 資料庫 session
 
     Returns:
         CSV 檔案
@@ -115,17 +415,86 @@ async def export_csv(request: ScanRequest):
         HTTPException: 當匯出失敗時
     """
     try:
-        logger.info(f"開始匯出 CSV: date={request.date}, count={request.count}")
-
-        # 執行掃描
-        results, _, _ = execute_scan(
-            scanner_type=request.scanner_type,
-            date=request.date,
-            count=request.count,
-            ascending=request.ascending,
-            simulation=request.simulation,
-            config_file="config.txt",
+        logger.info(
+            f"開始匯出 CSV: type={request.scanner_type}, date={request.date}, count={request.count}"
         )
+
+        # 先嘗試從資料庫讀取足夠筆數
+        cached_count = await get_daily_stock_count(
+            db,
+            request.date,
+            scanner_type=request.scanner_type,
+            ascending=request.ascending,
+        )
+        db_results = []
+        if cached_count >= request.count:
+            db_results = await get_daily_stocks(
+                db,
+                request.date,
+                limit=request.count,
+                ascending=request.ascending,
+                scanner_type=request.scanner_type,
+            )
+        elif cached_count > 0:
+            logger.info(
+                f"資料庫僅有 {cached_count} 筆 {request.date} 的 "
+                f"{request.scanner_type} 資料，少於要求的 {request.count} 筆，將重新呼叫 API 匯出"
+            )
+
+        if db_results:
+            logger.info(
+                f"從資料庫讀取 {request.date} 的資料用於匯出，共 {len(db_results)} 筆"
+            )
+            # 轉換為字典列表
+            results = [daily_stock_to_dict(item) for item in db_results]
+        else:
+            # 資料庫沒有足夠資料，抓滿 200 筆後寫入快取，再匯出使用者要求的筆數
+            logger.info(
+                f"資料庫無足夠資料，呼叫 Shioaji API 抓取 {CACHE_FILL_COUNT} 筆 "
+                f"資料進行匯出（ascending={request.ascending}）"
+            )
+            fetched_results, _, _ = execute_scan(
+                scanner_type=request.scanner_type,
+                date=request.date,
+                count=CACHE_FILL_COUNT,
+                ascending=request.ascending,
+                simulation=request.simulation,
+                config_file="config.txt",
+            )
+
+            cache_write_succeeded = False
+            if fetched_results:
+                try:
+                    await upsert_daily_stocks(
+                        db,
+                        request.date,
+                        fetched_results,
+                        scanner_type=request.scanner_type,
+                        ascending=request.ascending,
+                    )
+                    cache_write_succeeded = True
+                    logger.info(
+                        f"已將匯出取得的 {len(fetched_results)} 筆資料儲存到每日股票資料表"
+                    )
+                except Exception as e:
+                    await db.rollback()
+                    logger.error(f"儲存匯出取得的每日股票資料失敗: {e}")
+
+            results = []
+            if cache_write_succeeded:
+                db_results = await get_daily_stocks(
+                    db,
+                    request.date,
+                    limit=request.count,
+                    ascending=request.ascending,
+                    scanner_type=request.scanner_type,
+                )
+                results = [daily_stock_to_dict(item) for item in db_results]
+            if not results:
+                results = select_requested_results(
+                    fetched_results or [],
+                    request.count,
+                )
 
         # 產生 CSV
         csv_content = generate_csv(results)
@@ -141,4 +510,186 @@ async def export_csv(request: ScanRequest):
 
     except Exception as e:
         logger.error(f"CSV 匯出失敗: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"CSV 匯出失敗: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"CSV 匯出失敗: {e!s}")
+
+
+@router.get("/scan/history", response_model=ScanHistoryResponse)
+async def get_history(
+    limit: int = 10,
+    offset: int = 0,
+    *,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """
+    取得掃描歷史記錄
+
+    Args:
+        limit: 查詢數量（預設 10）
+        offset: 偏移量（預設 0）
+        db: 資料庫 session
+
+    Returns:
+        掃描歷史記錄列表
+
+    Raises:
+        HTTPException: 當查詢失敗時
+    """
+    try:
+        logger.info(f"查詢掃描歷史: limit={limit}, offset={offset}")
+
+        # 查詢歷史記錄
+        history = await get_scan_history(db, limit=limit, offset=offset)
+
+        # 轉換為 Pydantic 模型
+        history_items = [ScanHistoryItem.model_validate(item) for item in history]
+
+        return ScanHistoryResponse(
+            status="success",
+            data=history_items,
+            total_count=len(history_items),
+        )
+
+    except Exception as e:
+        logger.error(f"查詢歷史失敗: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"查詢歷史失敗: {e!s}")
+
+
+@router.get("/scan/latest")
+async def get_latest(
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """
+    取得最新一筆掃描記錄
+
+    Args:
+        db: 資料庫 session
+
+    Returns:
+        最新掃描記錄
+
+    Raises:
+        HTTPException: 當查詢失敗時
+    """
+    try:
+        logger.info("查詢最新掃描記錄")
+
+        # 查詢最新記錄
+        latest = await get_latest_scan(db)
+
+        if not latest:
+            raise HTTPException(status_code=404, detail="沒有掃描記錄")
+
+        # 轉換為 Pydantic 模型
+        latest_item = ScanHistoryItem.model_validate(latest)
+
+        return {
+            "status": "success",
+            "data": latest_item,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"查詢最新記錄失敗: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"查詢最新記錄失敗: {e!s}")
+
+
+@router.get("/daily/{date}", response_model=DailyStockResponse)
+async def get_daily_data(
+    date: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    limit: int = 200,
+    scanner_type: str | None = None,
+    ascending: bool | None = None,
+):
+    """
+    取得指定日期的股票資料
+
+    Args:
+        date: 交易日期（格式：YYYY-MM-DD）
+        limit: 查詢數量（預設 200）
+        db: 資料庫 session
+
+    Returns:
+        該日期的股票資料
+
+    Raises:
+        HTTPException: 當查詢失敗時
+    """
+    try:
+        logger.info(f"查詢每日資料: date={date}, limit={limit}")
+
+        selected_scanner_type = scanner_type
+        if selected_scanner_type is None:
+            scanner_types = await get_available_scanner_types(db, date)
+            if not scanner_types:
+                raise HTTPException(status_code=404, detail=f"找不到 {date} 的資料")
+            selected_scanner_type = (
+                "AmountRank" if "AmountRank" in scanner_types else scanner_types[0]
+            )
+
+        # Preserve the existing default direction, then fall back to ascending cache.
+        cache_directions = [ascending] if ascending is not None else [False, True]
+        stocks = []
+        for cache_ascending in cache_directions:
+            stocks = await get_daily_stocks(
+                db,
+                date=date,
+                limit=limit,
+                ascending=cache_ascending,
+                scanner_type=selected_scanner_type,
+            )
+            if stocks:
+                break
+
+        if not stocks:
+            raise HTTPException(status_code=404, detail=f"找不到 {date} 的資料")
+
+        # 轉換為 Pydantic 模型
+        stock_items = [DailyStockItem.model_validate(stock) for stock in stocks]
+
+        return DailyStockResponse(
+            status="success",
+            date=date,
+            data=stock_items,
+            total_count=len(stock_items),
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"查詢每日資料失敗: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"查詢失敗: {e!s}")
+
+
+@router.get("/daily/dates/list", response_model=AvailableDatesResponse)
+async def get_dates(
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """
+    取得資料庫中有資料的日期列表
+
+    Args:
+        db: 資料庫 session
+
+    Returns:
+        可用日期列表
+
+    Raises:
+        HTTPException: 當查詢失敗時
+    """
+    try:
+        logger.info("查詢可用日期列表")
+
+        # 查詢日期
+        dates = await get_available_dates(db)
+
+        return AvailableDatesResponse(
+            status="success",
+            dates=dates,
+            total_count=len(dates),
+        )
+
+    except Exception as e:
+        logger.error(f"查詢日期列表失敗: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"查詢失敗: {e!s}")

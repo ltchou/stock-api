@@ -49,6 +49,9 @@ backend/*.pyc
 backend/.pytest_cache/
 backend/.mypy_cache/
 backend/.ruff_cache/
+backend/data/
+backend/data/*.db
+backend/alembic/versions/*.py
 
 # Frontend
 frontend/node_modules/

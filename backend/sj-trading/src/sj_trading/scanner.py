@@ -16,13 +16,37 @@ def scanner_to_dict(scanner: Any) -> dict[str, Any]:
     """
     將 scanner 物件轉換為字典
 
+    使用官方文件建議的方法：使用 __dict__ 屬性
+    參考：https://sinotrade.github.io/tutor/market_data/scanners/
+
     Args:
         scanner: Shioaji scanner 物件
 
     Returns:
         包含 scanner 屬性的字典
     """
-    return scanner.__dict__.copy()
+    result = scanner.__dict__.copy()
+    logger.debug("Scanner object keys: %s", list(result.keys()))
+
+    # 欄位名稱映射（處理可能的命名差異）
+    field_mapping = {
+        "changePercent": "change_percent",
+        "changePrice": "change_price",
+        "totalVolume": "total_volume",
+        "totalAmount": "total_amount",
+        "averagePrice": "average_price",
+        "buyPrice": "buy_price",
+        "buyVolume": "buy_volume",
+        "sellPrice": "sell_price",
+        "sellVolume": "sell_volume",
+    }
+
+    # 應用欄位映射
+    for old_key, new_key in field_mapping.items():
+        if old_key in result:
+            result[new_key] = result[old_key]
+
+    return result
 
 
 def scanners_to_list(scanners: list[Any]) -> list[dict[str, Any]]:
@@ -35,7 +59,29 @@ def scanners_to_list(scanners: list[Any]) -> list[dict[str, Any]]:
     Returns:
         字典列表
     """
-    return [scanner_to_dict(scanner) for scanner in scanners]
+    logger.debug("Received %s scanner objects", len(scanners))
+    if scanners:
+        logger.debug("First scanner object type: %s", type(scanners[0]).__name__)
+    result = [scanner_to_dict(scanner) for scanner in scanners]
+    logger.debug("Converted %s scanner records", len(result))
+    return result
+
+
+def normalize_scanner_fields(
+    results: list[dict[str, Any]], scanner_type: str
+) -> list[dict[str, Any]]:
+    """
+    依掃描器類型補齊前端與快取使用的標準欄位。
+    """
+    for item in results:
+        if (
+            scanner_type == "ChangePercentRank"
+            and item.get("change_percent") is None
+            and item.get("rank_value") is not None
+        ):
+            item["change_percent"] = item["rank_value"]
+
+    return results
 
 
 def execute_scan(
@@ -114,16 +160,37 @@ def execute_scan(
                 )
 
         # 執行掃描
+        # 注意：Shioaji API 的 ascending 參數語義與預期相反
+        # ascending=True 在 Shioaji 中代表從大到小（降序）
+        # ascending=False 在 Shioaji 中代表從小到大（升序）
+        # 因此這裡需要反轉參數
+        shioaji_ascending = not ascending
+        logger.info(
+            f"呼叫 Shioaji API scanners: "
+            f"type={scanner_type}, date={date}, count={count}, "
+            f"user_ascending={ascending}, shioaji_ascending={shioaji_ascending}"
+        )
         scanners = client.scanners(
             scanner_type=scanner_type,
             date=date,
             count=count,
-            ascending=ascending,
+            ascending=shioaji_ascending,
             timeout=30000,
         )
 
+        num_scanners = len(scanners) if scanners else 0
+        logger.info(f"Shioaji API 回傳 {num_scanners} 個 scanner 物件")
+        if scanners:
+            logger.debug("First scanner object type: %s", type(scanners[0]).__name__)
+
         # 轉換為字典列表
         results = scanners_to_list(scanners)
+        results = normalize_scanner_fields(results, scanner_type)
+
+        if results:
+            logger.debug("Converted scanner result keys: %s", list(results[0].keys()))
+        else:
+            logger.warning("警告：轉換後沒有資料！")
 
         execution_time = time.time() - start_time
         logger.info(f"掃描完成，共 {len(results)} 筆資料，耗時 {execution_time:.2f} 秒")

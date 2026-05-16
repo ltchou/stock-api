@@ -98,7 +98,7 @@ class ShioajiClient:
         self,
         scanner_type: str,
         date: str,
-        count: int = 100,
+        count: int = 10,
         ascending: bool = True,
         timeout: int = 30000,
     ) -> list[Any]:

@@ -5,5 +5,11 @@ pydantic==2.11.0
 pydantic-settings==2.8.0
 python-multipart==0.0.20
 
+# 資料庫
+sqlalchemy==2.0.35
+alembic==1.13.3
+aiosqlite==0.20.0
+greenlet==3.1.1
+
 # 從 sj-trading 套件引用
 -e ./sj-trading
