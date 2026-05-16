@@ -49,6 +49,7 @@ def daily_stock_to_stock_data(item) -> StockData:
     return StockData(
         code=item.code,
         name=item.name,
+        date=item.date,
         open=item.open,
         high=item.high,
         low=item.low,
