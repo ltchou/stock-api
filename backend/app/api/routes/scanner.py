@@ -106,6 +106,38 @@ def select_requested_results(
     return stocks[:count]
 
 
+async def record_scan_failure(
+    db: AsyncSession,
+    request: ScanRequest,
+    error_message: str,
+) -> None:
+    """
+    Roll back any failed transaction state before recording scan failure history.
+    """
+    try:
+        await db.rollback()
+    except Exception as rollback_error:
+        logger.error(
+            "Failed to roll back before recording scan failure: %s",
+            rollback_error,
+        )
+
+    try:
+        await create_scan_history(
+            db=db,
+            scanner_type=request.scanner_type,
+            scan_date=request.date,
+            count=request.count,
+            ascending=request.ascending,
+            simulation=request.simulation,
+            success=False,
+            result_count=0,
+            error_message=error_message,
+        )
+    except Exception as history_error:
+        logger.error("Failed to record scan failure history: %s", history_error)
+
+
 @router.post("/scan", response_model=ScanResponse)
 async def scan_stocks(
     request: ScanRequest,
@@ -310,18 +342,7 @@ async def scan_stocks(
         error_msg = f"配置檔案錯誤: {e!s}"
         logger.error(error_msg)
 
-        # 儲存失敗記錄
-        await create_scan_history(
-            db=db,
-            scanner_type=request.scanner_type,
-            scan_date=request.date,
-            count=request.count,
-            ascending=request.ascending,
-            simulation=request.simulation,
-            success=False,
-            result_count=0,
-            error_message=error_msg,
-        )
+        await record_scan_failure(db, request, error_msg)
 
         raise HTTPException(status_code=500, detail=error_msg)
 
@@ -329,18 +350,7 @@ async def scan_stocks(
         error_msg = f"參數錯誤: {e!s}"
         logger.error(error_msg)
 
-        # 儲存失敗記錄
-        await create_scan_history(
-            db=db,
-            scanner_type=request.scanner_type,
-            scan_date=request.date,
-            count=request.count,
-            ascending=request.ascending,
-            simulation=request.simulation,
-            success=False,
-            result_count=0,
-            error_message=error_msg,
-        )
+        await record_scan_failure(db, request, error_msg)
 
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -348,18 +358,7 @@ async def scan_stocks(
         error_msg = "掃描逾時"
         logger.error(error_msg)
 
-        # 儲存失敗記錄
-        await create_scan_history(
-            db=db,
-            scanner_type=request.scanner_type,
-            scan_date=request.date,
-            count=request.count,
-            ascending=request.ascending,
-            simulation=request.simulation,
-            success=False,
-            result_count=0,
-            error_message=error_msg,
-        )
+        await record_scan_failure(db, request, error_msg)
 
         raise HTTPException(status_code=504, detail="掃描逾時，請稍後再試")
 
@@ -367,18 +366,7 @@ async def scan_stocks(
         error_msg = f"掃描失敗: {e!s}"
         logger.error(error_msg, exc_info=True)
 
-        # 儲存失敗記錄
-        await create_scan_history(
-            db=db,
-            scanner_type=request.scanner_type,
-            scan_date=request.date,
-            count=request.count,
-            ascending=request.ascending,
-            simulation=request.simulation,
-            success=False,
-            result_count=0,
-            error_message=error_msg,
-        )
+        await record_scan_failure(db, request, error_msg)
 
         raise HTTPException(status_code=500, detail=error_msg)
 
