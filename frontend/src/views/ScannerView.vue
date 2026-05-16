@@ -215,6 +215,13 @@ const formData = reactive<ScanRequest>({
   page_size: 20 // 每頁顯示筆數
 })
 
+const formatLocalDate = (date: Date): string => {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
 onMounted(() => {
   // 設定預設日期為今天，若今天是週末則設定為上個週五
   const today = new Date()
@@ -229,7 +236,7 @@ onMounted(() => {
     today.setDate(today.getDate() - 1)
   }
 
-  formData.date = today.toISOString().split('T')[0] as string
+  formData.date = formatLocalDate(today)
 })
 
 const disabledWeekends = (date: Date) => {
